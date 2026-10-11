@@ -531,11 +531,13 @@ impl<'a> State<'a> {
                     return;
                 }
             }
-        } else {
+        } else if ctx.config.markdown.bottom_footnotes {
             format!(
-                r##"<sup class="footnote-reference" id="fr-{name}-{nr}"><a href="{}#fn-{name}">{n}</a></sup>"##,
+                r##"<sup class="footnote-reference" id="fr-{name}-{nr}"><a href="{}#fn-{name}">[{n}]</a></sup>"##,
                 ctx.current_permalink
             )
+        } else {
+            format!(r##"<sup class="footnote-reference"><a href="#{name}">{n}</a></sup>"##,)
         };
         self.push_html(reference);
     }
@@ -567,12 +569,12 @@ impl<'a> State<'a> {
             self.push_html(html);
         } else {
             self.push_html(format!(
-                r##"<div id="fn-{name}" class="footnote-definition"><sup class="footnote-definition-label">{n}</sup>"##,
+                r##"<div class="footnote-definition" id="{name}"><sup class="footnote-definition-label">{n}</sup>"##,
             ));
             for c in note.content {
                 self.push(c);
             }
-            self.push_html("</div>");
+            self.push_html("</div>\n");
         };
     }
 
