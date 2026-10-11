@@ -9,6 +9,7 @@ use regex::{Regex, RegexBuilder};
 
 use errors::{Error, Result, bail};
 use render::render_anchor_link;
+use tera::context;
 use utils::net::is_external_link;
 use utils::site::resolve_internal_link;
 use utils::slugs::slugify_anchors;
@@ -512,11 +513,67 @@ impl<'a> State<'a> {
         let n = self.footnote_numbers.len() + 1;
         let (n, nr) = self.footnote_numbers.entry(name.clone()).or_insert((n, 0));
         *nr += 1;
-        let reference = format!(
-            r##"<sup class="footnote-reference" id="fr-{name}-{nr}"><a href="{}#fn-{name}">[{n}]</a></sup>"##,
-            ctx.current_permalink
-        );
+        let reference = if ctx.tera.contains_component("footnote_reference") {
+            match ctx.tera.render_component(
+                "footnote_reference",
+                &context! {
+                    name,
+                    n,
+                    nr,
+                    permalink => ctx.current_permalink
+                },
+                None,
+                true,
+            ) {
+                Ok(text) => text,
+                Err(error) => {
+                    self.errors.push(error.into());
+                    return;
+                }
+            }
+        } else {
+            format!(
+                r##"<sup class="footnote-reference" id="fr-{name}-{nr}"><a href="{}#fn-{name}">{n}</a></sup>"##,
+                ctx.current_permalink
+            )
+        };
         self.push_html(reference);
+    }
+
+    fn render_footnote_def(&mut self, note: FootnoteDef, ctx: &MarkdownContext) {
+        let name = note.name.clone();
+        let n = self.footnote_numbers.len() + 1;
+        let (n, nr) = self.footnote_numbers.get(&note.name).cloned().unwrap_or((n, 0));
+        if ctx.tera.contains_component("footnote") {
+            let mut body = String::with_capacity(note.content.len() * 32);
+            pulldown_cmark::html::push_html(&mut body, note.content.into_iter());
+            let html = match ctx.tera.render_component(
+                "footnote",
+                &context! {
+                    name,
+                    n,
+                    nr,
+                    permalink => ctx.current_permalink
+                },
+                Some(&body),
+                true,
+            ) {
+                Ok(text) => text,
+                Err(error) => {
+                    self.errors.push(error.into());
+                    return;
+                }
+            };
+            self.push_html(html);
+        } else {
+            self.push_html(format!(
+                r##"<div id="fn-{name}" class="footnote-definition"><sup class="footnote-definition-label">{n}</sup>"##,
+            ));
+            for c in note.content {
+                self.push(c);
+            }
+            self.push_html("</div>");
+        };
     }
 
     #[inline]
@@ -565,16 +622,18 @@ impl<'a> State<'a> {
             Event::End(TagEnd::Image) => self.end_image(ctx),
 
             // Footnotes
-            Event::Start(Tag::FootnoteDefinition(name)) if ctx.config.markdown.bottom_footnotes => {
+            Event::Start(Tag::FootnoteDefinition(name)) => {
                 self.footnote = Some(FootnoteDef { name: name.to_string(), content: Vec::new() });
             }
-            Event::End(TagEnd::FootnoteDefinition) if ctx.config.markdown.bottom_footnotes => {
+            Event::End(TagEnd::FootnoteDefinition) => {
                 let f = self.footnote.take().unwrap();
-                self.complete_footnotes.push(f);
+                if ctx.config.markdown.bottom_footnotes {
+                    self.complete_footnotes.push(f);
+                } else {
+                    self.render_footnote_def(f, ctx);
+                }
             }
-            Event::FootnoteReference(name) if ctx.config.markdown.bottom_footnotes => {
-                self.handle_footnote_ref(name, ctx)
-            }
+            Event::FootnoteReference(name) => self.handle_footnote_ref(name, ctx),
 
             // Replacing emojis when not in a code block
             Event::Text(text) => {
